@@ -2,8 +2,7 @@ import express from "express";
 import { SERVER_ROUTES } from "./appConfig.js";
 import UsuarioController from "./controller/UsuarioController.js";
 import EquipamentoController from "./controller/EquipamentoController.js";
-import EmprestimoController
- from "./controller/EmprestimoController.js";
+import EmprestimoController from "./controller/EmprestimoController.js";
 const router = express.Router();
 
 router.get('/', (req, res) => {
