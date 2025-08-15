@@ -117,8 +117,7 @@ class UsuarioController extends Usuario {
             }
 
             const usuario = await Usuario.buscarPorId(idUsuario);
-            console.log(usuario);
-
+           
             if (!usuario) {
                 return res.status(404).json
                 ({ mensagem: "Usuário não encontrado." });
