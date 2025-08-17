@@ -1,7 +1,5 @@
 import { DatabaseModel } from "./model/DatabaseModel.js";
 import { server } from "./server.js";
-import dns from 'dns';
-dns.setDefaultResultOrder('ipv4first');
 
 const port: number = parseInt(process.env.SERVER_PORT as string);
 
