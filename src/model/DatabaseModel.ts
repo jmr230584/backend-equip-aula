@@ -1,64 +1,67 @@
 import pg from "pg";
 import dotenv from "dotenv";
-
 dotenv.config();
 
-function normalizeCaFromEnv(raw?: string): string | undefined {
+function normalizeCa(raw?: string): string | undefined {
   if (!raw) return undefined;
-  // Se já veio o PEM "cru"
   if (raw.includes("-----BEGIN CERTIFICATE-----")) return raw;
-  // Se veio base64 (às vezes é mais prático colar como base64 no Render)
-  try {
-    return Buffer.from(raw, "base64").toString("utf8");
-  } catch {
-    return raw; // último recurso
-  }
+  try { return Buffer.from(raw, "base64").toString("utf8"); } catch { return raw; }
 }
 
 export class DatabaseModel {
   private _pool: pg.Pool;
 
   constructor() {
-    const useConnString = !!process.env.DATABASE_URL;
+    const hasConnString = !!process.env.DATABASE_URL;
+    const ca = normalizeCa(process.env.DB_CA_CERT);
 
-    // Se estiver usando o pooler do Supabase em produção, preferimos validar com a CA
-    const caFromEnv = normalizeCaFromEnv(process.env.DB_CA_CERT);
+    // 🔎 Logs úteis (não expõem segredos)
+    console.log("[DB] NODE_ENV =", process.env.NODE_ENV);
+    console.log("[DB] Tem DATABASE_URL? ", hasConnString);
 
-    const config: pg.PoolConfig = useConnString
-      ? {
-          // Produção: 1 variável só
-          connectionString: process.env.DATABASE_URL, // ex: postgres://user:pass@aws-0-xxx.pooler.supabase.com:5432/db?sslmode=require
-          ssl: caFromEnv
-            ? {
-                ca: caFromEnv,             // valida a cadeia cert (recomendado)
-                rejectUnauthorized: true,
-              }
-            : {
-                //fallback seguro o suficiente para Render+Supabase para não gerenciar a CA
-                rejectUnauthorized: false,
-              },
-          max: 10,
-          idleTimeoutMillis: 10_000,
-        }
-      : {
-          // Local
-          user: process.env.DB_USER,
-          host: process.env.DB_HOST,
-          database: process.env.DB_NAME,
-          password: process.env.DB_PASSWORD,
-          port: Number(process.env.DB_PORT) || 5432,
-          ssl:
-            process.env.NODE_ENV === "production"
-              ? { rejectUnauthorized: false }
-              : undefined,
-          max: 10,
-          idleTimeoutMillis: 10_000,
-        };
+    let config: pg.PoolConfig;
+
+    if (hasConnString) {
+      // PRODUÇÃO: usa somente DATABASE_URL (Supabase Pooler)
+      // 👇 Força no-verify por padrão (resolve SELF_SIGNED_CERT_IN_CHAIN)
+      //    Se você definir DB_CA_CERT, passa a validar a cadeia.
+      config = {
+        connectionString: process.env.DATABASE_URL,
+        ssl: ca
+          ? { ca, rejectUnauthorized: true }
+          : { rejectUnauthorized: false }, // << força no-verify
+        max: 10,
+        idleTimeoutMillis: 10_000,
+      };
+
+      try {
+        const u = new URL(process.env.DATABASE_URL!);
+        console.log("[DB] Host =", u.hostname, "Port =", u.port || "(default)");
+        console.log("[DB] Pooler? ", u.hostname.includes("pooler.supabase.com"));
+        console.log("[DB] SSL no-verify? ", !ca);
+      } catch {
+        console.log("[DB] DATABASE_URL inválida");
+      }
+
+    } else {
+      // LOCAL: mantém como você usa
+      const isProd = process.env.NODE_ENV === "production";
+      config = {
+        user: process.env.DB_USER,
+        host: process.env.DB_HOST,
+        database: process.env.DB_NAME,
+        password: process.env.DB_PASSWORD,
+        port: Number(process.env.DB_PORT) || 5432,
+        ssl: isProd ? { rejectUnauthorized: false } : undefined,
+        max: 10,
+        idleTimeoutMillis: 10_000,
+      };
+      console.log("[DB] Usando config local (campos separados).");
+    }
 
     this._pool = new pg.Pool(config);
   }
 
-  /** Teste simples de conexão */
   public async testeConexao(): Promise<boolean> {
     try {
       const { rows } = await this._pool.query("select now()");
@@ -67,11 +70,11 @@ export class DatabaseModel {
       return true;
     } catch (error) {
       console.error("Error to connect database X(", error);
+      console.error("Não foi possível conectar ao banco de dados");
       return false;
     }
   }
 
-  /** Exponha o pool para uso nos DAOs/Repos */
   public get pool() {
     return this._pool;
   }
