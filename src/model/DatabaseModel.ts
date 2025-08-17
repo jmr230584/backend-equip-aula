@@ -1,3 +1,4 @@
+// src/model/DatabaseModel.ts
 import pg from "pg";
 import dotenv from "dotenv";
 dotenv.config();
@@ -5,7 +6,12 @@ dotenv.config();
 function normalizeCa(raw?: string): string | undefined {
   if (!raw) return undefined;
   if (raw.includes("-----BEGIN CERTIFICATE-----")) return raw;
-  try { return Buffer.from(raw, "base64").toString("utf8"); } catch { return raw; }
+  try {
+    // permite colar a CA em base64 no Render
+    return Buffer.from(raw, "base64").toString("utf8");
+  } catch {
+    return raw;
+  }
 }
 
 export class DatabaseModel {
@@ -15,36 +21,36 @@ export class DatabaseModel {
     const hasConnString = !!process.env.DATABASE_URL;
     const ca = normalizeCa(process.env.DB_CA_CERT);
 
-    // 🔎 Logs úteis (não expõem segredos)
-    console.log("[DB] NODE_ENV =", process.env.NODE_ENV);
-    console.log("[DB] Tem DATABASE_URL? ", hasConnString);
+    // Logs de diagnóstico (não expõem segredos)
+    try {
+      console.log("[DB] NODE_ENV =", process.env.NODE_ENV);
+      console.log("[DB] DATABASE_URL presente? ", hasConnString);
+      if (hasConnString) {
+        const u = new URL(process.env.DATABASE_URL!);
+        console.log("[DB] Host =", u.hostname, "Port =", u.port || "(default)");
+        console.log("[DB] Pooler? ", u.hostname.includes("pooler.supabase.com"));
+      } else {
+        console.log("[DB] Usando config local (DB_HOST/DB_USER/DB_NAME...)");
+      }
+      console.log("[DB] DB_CA_CERT presente? ", !!ca);
+    } catch {
+      /* ignore */
+    }
 
     let config: pg.PoolConfig;
 
     if (hasConnString) {
-      // PRODUÇÃO: usa somente DATABASE_URL (Supabase Pooler)
-      // 👇 Força no-verify por padrão (resolve SELF_SIGNED_CERT_IN_CHAIN)
-      //    Se você definir DB_CA_CERT, passa a validar a cadeia.
+      // PRODUÇÃO (Render): usar apenas a connection string do Supabase Pooler
       config = {
-        connectionString: process.env.DATABASE_URL,
+        connectionString: process.env.DATABASE_URL, // ex.: ...pooler.supabase.com:5432/postgres?sslmode=require
         ssl: ca
-          ? { ca, rejectUnauthorized: true }
-          : { rejectUnauthorized: false }, // << força no-verify
+          ? { ca, rejectUnauthorized: true } // valida a cadeia com a CA fornecida
+          : { rejectUnauthorized: false },   // fallback prático p/ resolver SELF_SIGNED_CERT_IN_CHAIN
         max: 10,
         idleTimeoutMillis: 10_000,
       };
-
-      try {
-        const u = new URL(process.env.DATABASE_URL!);
-        console.log("[DB] Host =", u.hostname, "Port =", u.port || "(default)");
-        console.log("[DB] Pooler? ", u.hostname.includes("pooler.supabase.com"));
-        console.log("[DB] SSL no-verify? ", !ca);
-      } catch {
-        console.log("[DB] DATABASE_URL inválida");
-      }
-
     } else {
-      // LOCAL: mantém como você usa
+      // LOCAL: mantém sua conexão por campos
       const isProd = process.env.NODE_ENV === "production";
       config = {
         user: process.env.DB_USER,
@@ -56,12 +62,12 @@ export class DatabaseModel {
         max: 10,
         idleTimeoutMillis: 10_000,
       };
-      console.log("[DB] Usando config local (campos separados).");
     }
 
     this._pool = new pg.Pool(config);
   }
 
+  /** Teste simples de conexão */
   public async testeConexao(): Promise<boolean> {
     try {
       const { rows } = await this._pool.query("select now()");
@@ -75,6 +81,7 @@ export class DatabaseModel {
     }
   }
 
+  /** Expor o pool */
   public get pool() {
     return this._pool;
   }
